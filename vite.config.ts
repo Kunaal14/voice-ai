@@ -20,6 +20,8 @@ export default defineConfig(({ mode }) => {
         'process.env.FORM_WEBHOOK_URL': JSON.stringify(env.FORM_WEBHOOK_URL),
         'process.env.TRANSCRIPT_WEBHOOK_URL': JSON.stringify(env.TRANSCRIPT_WEBHOOK_URL),
         'process.env.CALENDAR_AVAILABILITY_URL': JSON.stringify(env.CALENDAR_AVAILABILITY_URL),
+        // Cal.com integration (optional)
+        'process.env.CAL_COM_LINK': JSON.stringify(env.CAL_COM_LINK),
       },
       resolve: {
         alias: {

@@ -61,6 +61,81 @@ const App: React.FC = () => {
     return () => observer.disconnect();
   }, []);
 
+  // Load Cal.com embed script
+  useEffect(() => {
+    // Initialize Cal.com loader (matches Cal.com's embed code)
+    (function (C: any, A: string, L: string) {
+      let p = function (a: any, ar: any) { a.q.push(ar); };
+      let d = C.document;
+      C.Cal = C.Cal || function () {
+        let cal = C.Cal;
+        let ar = arguments;
+        if (!cal.loaded) {
+          cal.ns = {};
+          cal.q = cal.q || [];
+          d.head.appendChild(d.createElement("script")).src = A;
+          cal.loaded = true;
+        }
+        if (ar[0] === L) {
+          const api = function () { p(api, arguments); };
+          const namespace = ar[1];
+          api.q = api.q || [];
+          if (typeof namespace === "string") {
+            cal.ns[namespace] = cal.ns[namespace] || api;
+            p(cal.ns[namespace], ar);
+            p(cal, ["initNamespace", namespace]);
+          } else p(cal, ar);
+          return;
+        }
+        p(cal, ar);
+      };
+    })(window, "https://app.cal.com/embed/embed.js", "init");
+
+    // Initialize Cal.com for the calendar (only if CAL_COM_LINK is configured)
+    const calComLink = process.env.CAL_COM_LINK;
+    if (calComLink) {
+      (window as any).Cal("init", "call-30-minute", { origin: "https://app.cal.com" });
+    }
+    
+    // Wait for script to load and namespace to be available before initializing inline calendar
+    if (calComLink) {
+      const checkCal = setInterval(() => {
+        if ((window as any).Cal && (window as any).Cal.ns && (window as any).Cal.ns["call-30-minute"]) {
+          try {
+            (window as any).Cal.ns["call-30-minute"]("inline", {
+              elementOrSelector: "#my-cal-inline-call-30-minute",
+              config: { 
+                "layout": "month_view",
+                "timeZone": "America/New_York" // Change this to your desired timezone (e.g., "UTC", "America/Los_Angeles", "Europe/London")
+              },
+              calLink: calComLink,
+            });
+
+            (window as any).Cal.ns["call-30-minute"]("ui", { "hideEventTypeDetails": false, "layout": "month_view" });
+            clearInterval(checkCal);
+          } catch (e) {
+            console.error("Error initializing Cal.com calendar:", e);
+          }
+        }
+      }, 100);
+
+      // Cleanup interval after 10 seconds
+      const timeout = setTimeout(() => {
+        clearInterval(checkCal);
+      }, 10000);
+      
+      return () => {
+        clearInterval(checkCal);
+        clearTimeout(timeout);
+      };
+    }
+
+    return () => {
+      clearInterval(checkCal);
+      clearTimeout(timeout);
+    };
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -284,6 +359,19 @@ const App: React.FC = () => {
 
         {/* ROI Calculator Integrated Here */}
         <ROICalculator />
+
+        {/* Cal.com Calendar Section */}
+        <section className="py-32 px-6 max-w-7xl mx-auto">
+          <div className="text-center mb-16 reveal opacity-0 translate-y-10 transition-all duration-700">
+            <h3 className="text-[10px] font-black uppercase tracking-[0.5em] text-indigo-400/60 mb-2">Schedule a Call</h3>
+            <h2 className="text-5xl font-outfit font-bold text-white mb-4 tracking-tight">Book Your Demo</h2>
+            <p className="text-white/40 font-light max-w-xl mx-auto">Choose a time that works best for you and let's discuss how Tigest can transform your business.</p>
+          </div>
+          
+          <div className="bg-[#0a0a0a] border border-white/5 rounded-[3rem] p-8 md:p-12 reveal opacity-0 translate-y-10 transition-all duration-700">
+            <div style={{ width: '100%', height: '100%', overflow: 'scroll' }} id="my-cal-inline-call-30-minute"></div>
+          </div>
+        </section>
 
         {/* Integration Section */}
         <section id="integrations" className="py-32 px-6 border-y border-white/5 bg-gradient-to-b from-transparent via-white/[0.01] to-transparent overflow-hidden">
