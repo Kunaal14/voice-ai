@@ -5,28 +5,33 @@ import { ConnectionStatus, Message } from '../types';
 import { decode, decodeAudioData, createPcmBlob } from '../services/audioUtils';
 import Visualizer from './Visualizer';
 
+// Sub-components
+import Avatar from './voice/Avatar';
+import TranscriptBox from './voice/TranscriptBox';
+import StatusHeader from './voice/StatusHeader';
+import Controls from './voice/Controls';
+
 const TRANSCRIPT_WEBHOOK_URL = "https://kunaal-n8n-app.proudsmoke-84fb7068.northeurope.azurecontainerapps.io/webhook/landing-page";
-const MAX_CALL_DURATION = 300; // 5 minutes
-const SILENCE_TIMEOUT_MS = 20000; 
-const VAD_SENSITIVITY = 1.1;
+const MAX_CALL_DURATION = 300; 
+const SILENCE_TIMEOUT_MS = 15000; // Exact 15s
+const MIN_RMS_THRESHOLD = 0.003; // More sensitive floor
+const VAD_SENSITIVITY = 1.15; // More forgiving multiplier
 
 const SYSTEM_INSTRUCTION = `
-You are 'Nova', the lead Voice AI specialist at NovaVoice AI.
+You are 'Sara', the lead Voice AI specialist at Tigest.
 
 ## PERSONA:
 - Professional, fluent, and extremely patient.
-- You are here to demonstrate how our AI receptionists work.
-- Use natural conversation. 
+- You demonstrate how Tigest AI receptionists work.
+
+## TERMINATION PROTOCOL:
+- IMPORTANT: When the user says goodbye or the conversation is clearly over, YOU MUST say a short closing remark and then call the 'terminate_call' tool immediately.
+- Once business is concluded (lead captured or info provided), don't linger.
 
 ## CONVERSATION FLOW:
-1. Greet the user and ask for their name and business type.
-2. Answer any questions they have about AI receptionists or lead capture.
-3. Try to get an email address to send them a follow-up demo plan.
-4. NEVER end the call yourself unless the user says "Goodbye", "I'm done", or "End call".
-
-## IMPORTANT:
-- If the user is mid-sentence or sounds like they have more to say, WAIT. 
-- Do not use 'terminate_call' unless the user is explicitly finished.
+1. Greet the user, ask for their name and business type.
+2. Answer questions about AI lead capture.
+3. Attempt to get an email for a follow-up.
 `;
 
 const tools: { functionDeclarations: FunctionDeclaration[] }[] = [{
@@ -66,10 +71,10 @@ const VoiceAgent: React.FC = () => {
   const activeSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const streamRef = useRef<MediaStream | null>(null);
   const transcriptRef = useRef<Message[]>([]);
-  const sessionPromiseRef = useRef<Promise<any> | null>(null);
   const timerRef = useRef<number | null>(null);
   const lastActivityRef = useRef<number>(Date.now());
   const pendingTerminationRef = useRef(false);
+  const sessionActiveRef = useRef(false);
   
   const noiseFloorRef = useRef(0.005);
   const vadHangTimeRef = useRef(0);
@@ -83,14 +88,15 @@ const VoiceAgent: React.FC = () => {
   const outputBuffer = useRef('');
 
   const stopSession = useCallback(() => {
-    if (status === ConnectionStatus.DISCONNECTED) return;
+    sessionActiveRef.current = false;
     
-    if (mediaRecorderRef.current?.state !== 'inactive') {
-      try { mediaRecorderRef.current?.stop(); } catch(e) {}
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try { mediaRecorderRef.current.stop(); } catch(e) {}
     }
     
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
     }
     
     activeSourcesRef.current.forEach(s => {
@@ -104,15 +110,14 @@ const VoiceAgent: React.FC = () => {
     }
     
     if (audioContextRef.current) {
-      audioContextRef.current.input.close();
-      audioContextRef.current.output.close();
+      audioContextRef.current.input.close().catch(() => {});
+      audioContextRef.current.output.close().catch(() => {});
       audioContextRef.current = null;
     }
     
     setStatus(ConnectionStatus.DISCONNECTED);
     setIsAgentSpeaking(false);
     setIsUserSpeaking(false);
-    sessionPromiseRef.current = null;
     setTimeLeft(MAX_CALL_DURATION);
     setLiveTranscript({user: '', agent: ''});
     nextStartTimeRef.current = 0;
@@ -120,13 +125,14 @@ const VoiceAgent: React.FC = () => {
   }, [status]);
 
   const finalizeAndSend = useCallback(async (audioBlob: Blob) => {
+    if (audioBlob.size === 0) return;
     const reader = new FileReader();
     reader.readAsDataURL(audioBlob);
     reader.onloadend = async () => {
       const base64Audio = (reader.result as string).split(',')[1];
       try {
         const payload = {
-          session_id: `nova_demo_${Date.now()}`,
+          session_id: `tigest_demo_${Date.now()}`,
           lead_data: leadDataRef.current,
           full_transcript: transcriptRef.current,
           duration_seconds: MAX_CALL_DURATION - timeLeft,
@@ -153,7 +159,14 @@ const VoiceAgent: React.FC = () => {
       }, 1000);
 
       activityInterval = window.setInterval(() => {
+        // Heartbeat logic
+        if (isAgentSpeaking || isUserSpeaking) {
+          lastActivityRef.current = Date.now();
+          return;
+        }
+
         if (Date.now() - lastActivityRef.current > SILENCE_TIMEOUT_MS) {
+          console.log("Terminating: Inactivity.");
           stopSession();
         }
       }, 1000);
@@ -162,7 +175,7 @@ const VoiceAgent: React.FC = () => {
       if (timerRef.current) clearInterval(timerRef.current);
       if (activityInterval) clearInterval(activityInterval);
     };
-  }, [status, stopSession]);
+  }, [status, stopSession, isAgentSpeaking, isUserSpeaking]);
 
   const startSession = async () => {
     try {
@@ -172,8 +185,13 @@ const VoiceAgent: React.FC = () => {
       audioChunksRef.current = [];
       leadDataRef.current = { name: '', email: '', business_nature: '' };
       pendingTerminationRef.current = false;
+      lastActivityRef.current = Date.now();
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      } });
       streamRef.current = stream;
 
       const inputCtx = new AudioContext({ sampleRate: 16000 });
@@ -203,44 +221,62 @@ const VoiceAgent: React.FC = () => {
         },
         callbacks: {
           onopen: () => {
+            console.log("Session Opened");
+            sessionActiveRef.current = true;
             setStatus(ConnectionStatus.CONNECTED);
+            
             const source = inputCtx.createMediaStreamSource(stream);
-            const scriptProcessor = inputCtx.createScriptProcessor(4096, 1, 1);
+            const scriptProcessor = inputCtx.createScriptProcessor(2048, 1, 1);
             
             scriptProcessor.onaudioprocess = (e) => {
-              if (pendingTerminationRef.current) return;
+              if (!sessionActiveRef.current || pendingTerminationRef.current) return;
+              
               const inputData = e.inputBuffer.getChannelData(0);
               let sumSquares = 0;
               for(let i=0; i<inputData.length; i++) sumSquares += inputData[i] * inputData[i];
               const rms = Math.sqrt(sumSquares / inputData.length);
-              noiseFloorRef.current = (noiseFloorRef.current * 0.99) + (rms * 0.01);
 
-              if (rms > noiseFloorRef.current * VAD_SENSITIVITY && rms > 0.003) {
+              // Update noise floor slowly
+              if (!isUserSpeaking && !isAgentSpeaking) {
+                noiseFloorRef.current = (noiseFloorRef.current * 0.99) + (rms * 0.01);
+              }
+
+              const isDetectingSpeech = rms > Math.max(noiseFloorRef.current * VAD_SENSITIVITY, MIN_RMS_THRESHOLD);
+
+              if (isDetectingSpeech) {
                 setIsUserSpeaking(true);
                 lastActivityRef.current = Date.now();
-                vadHangTimeRef.current = 60;
-                sessionPromise.then(s => s.sendRealtimeInput({ media: createPcmBlob(inputData) }));
+                vadHangTimeRef.current = 15; // Maintain for ~1.5s
+                sessionPromise.then(s => {
+                  if (sessionActiveRef.current) s.sendRealtimeInput({ media: createPcmBlob(inputData) });
+                }).catch(() => {});
               } else if (vadHangTimeRef.current > 0) {
                 vadHangTimeRef.current--;
-                sessionPromise.then(s => s.sendRealtimeInput({ media: createPcmBlob(inputData) }));
+                sessionPromise.then(s => {
+                  if (sessionActiveRef.current) s.sendRealtimeInput({ media: createPcmBlob(inputData) });
+                }).catch(() => {});
               } else {
                 setIsUserSpeaking(false);
               }
             };
             source.connect(scriptProcessor);
             scriptProcessor.connect(inputCtx.destination);
-            sessionPromise.then(s => s.sendRealtimeInput({ text: "Hi Nova, I'm a visitor. Briefly introduce yourself and ask how you can help with my business today." }));
+            
+            sessionPromise.then(s => {
+              if (sessionActiveRef.current) s.sendRealtimeInput({ text: "Introduce yourself as Sara from Tigest. Greet me warmly and ask for my name and business." });
+            }).catch(() => {});
           },
           onmessage: async (message: LiveServerMessage) => {
+            if (!sessionActiveRef.current) return;
+            lastActivityRef.current = Date.now();
+
             if (message.serverContent?.interrupted) {
-              // CAPTURE INTERRUPTED TRANSCRIPT
               if (outputBuffer.current.trim()) {
                 const interruptedText = `${outputBuffer.current.trim()}...`;
                 const newHistory = [...transcriptRef.current, { role: 'agent' as const, text: interruptedText }];
                 transcriptRef.current = newHistory;
                 setTranscriptState(newHistory);
               }
-              
               activeSourcesRef.current.forEach(s => { try { s.stop(); } catch(e) {} });
               activeSourcesRef.current.clear();
               nextStartTimeRef.current = 0;
@@ -267,12 +303,10 @@ const VoiceAgent: React.FC = () => {
             if (message.serverContent?.inputTranscription) {
               inputBuffer.current += message.serverContent.inputTranscription.text;
               setLiveTranscript(prev => ({ ...prev, user: inputBuffer.current }));
-              lastActivityRef.current = Date.now();
             }
             if (message.serverContent?.outputTranscription) {
               outputBuffer.current += message.serverContent.outputTranscription.text;
               setLiveTranscript(prev => ({ ...prev, agent: outputBuffer.current }));
-              lastActivityRef.current = Date.now(); 
             }
 
             if (message.serverContent?.turnComplete) {
@@ -307,12 +341,13 @@ const VoiceAgent: React.FC = () => {
               source.buffer = audioBuffer;
               source.connect(ctx.destination);
               source.connect(mixedDestRef.current);
+              
               source.onended = () => {
                 activeSourcesRef.current.delete(source);
                 if (activeSourcesRef.current.size === 0) {
                   setIsAgentSpeaking(false);
                   if (pendingTerminationRef.current) {
-                    setTimeout(stopSession, 1000);
+                    setTimeout(stopSession, 1200);
                   }
                 }
               };
@@ -321,33 +356,50 @@ const VoiceAgent: React.FC = () => {
               activeSourcesRef.current.add(source);
             }
           },
-          onerror: () => stopSession(),
-          onclose: () => stopSession()
+          onerror: (e) => {
+            console.error("Gemini Session Error:", e);
+            setStatus(ConnectionStatus.ERROR);
+            setTimeout(stopSession, 3000);
+          },
+          onclose: () => {
+            console.log("Session Closed by server");
+            stopSession();
+          }
         }
       });
-      sessionPromiseRef.current = sessionPromise;
-    } catch (err) { setStatus(ConnectionStatus.DISCONNECTED); }
+    } catch (err) { 
+      console.error("Start Session Failed:", err);
+      setStatus(ConnectionStatus.ERROR);
+      setTimeout(stopSession, 3000);
+    }
   };
 
   return (
-    <div className="flex flex-col items-center p-8 bg-[#0a0a0a] border border-white/5 rounded-[3rem] shadow-2xl backdrop-blur-md max-w-md w-full mx-auto relative z-20 overflow-hidden min-h-[680px]">
+    <div id="voice-agent-container" className="flex flex-col items-center p-8 bg-[#0a0a0a] border border-white/5 rounded-[3rem] shadow-2xl backdrop-blur-md max-w-md w-full mx-auto relative z-20 overflow-hidden min-h-[680px]">
       
-      {/* Session Timer (Only when active) */}
-      {status === ConnectionStatus.CONNECTED && (
-        <div className="absolute top-8 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-white/5 border border-white/10 text-[10px] font-mono text-white/40 tracking-[0.2em] z-30 flex items-center space-x-2">
-          <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-          <span>SESSION: {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, '0')}</span>
+      <StatusHeader timeLeft={timeLeft} status={status} />
+
+      {status === ConnectionStatus.ERROR && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-12 text-center animate-in fade-in duration-300">
+           <div className="space-y-6">
+              <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto border border-red-500/40">
+                <svg className="w-8 h-8 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <h4 className="text-xl font-bold text-white">Connection Interrupted</h4>
+              <p className="text-white/40 text-sm">A network issue occurred. Please check your internet and try again.</p>
+              <button onClick={stopSession} className="px-6 py-3 bg-white text-black font-bold rounded-xl text-xs uppercase tracking-widest">Reset Agent</button>
+           </div>
         </div>
       )}
 
       {status === ConnectionStatus.DISCONNECTED ? (
         <div className="flex-1 w-full flex flex-col items-center justify-between py-10 animate-in fade-in slide-in-from-bottom-4 duration-700">
-          
           <div className="mt-12 flex flex-col items-center">
-            {/* Pulsing Neural Orb */}
             <div className="relative mb-12">
                <div className="absolute inset-0 bg-indigo-500/10 blur-[60px] rounded-full scale-150 animate-pulse" />
-               <div className="w-36 h-36 bg-indigo-600/10 rounded-full flex items-center justify-center border border-indigo-500/20 shadow-[0_0_80px_rgba(79,70,229,0.15)] group transition-all duration-700 hover:scale-110 hover:border-indigo-500/40">
+               <div className="w-36 h-36 bg-indigo-600/10 rounded-full flex items-center justify-center border border-indigo-500/20 shadow-[0_0_80px_rgba(79,70,229,0.15)] group transition-all duration-700 hover:scale-110 hover:border-indigo-500/40 cursor-pointer" onClick={startSession}>
                   <div className="w-24 h-24 bg-indigo-600/20 rounded-full flex items-center justify-center">
                     <svg className="w-12 h-12 text-indigo-400 group-hover:text-indigo-300 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m8 0h-3m4-12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -355,65 +407,33 @@ const VoiceAgent: React.FC = () => {
                   </div>
                </div>
             </div>
-
-            <h3 className="text-4xl font-outfit font-bold text-white mb-2 text-center tracking-tighter">Nova AI</h3>
+            <h3 className="text-4xl font-outfit font-bold text-white mb-2 text-center tracking-tighter">Tigest AI</h3>
             <p className="text-white/20 text-[10px] uppercase tracking-[0.4em] font-bold">Intelligent Voice Agent</p>
           </div>
-
-          {/* Bottom Call Action */}
-          <div className="w-full">
-            <button 
-                onClick={startSession}
-                className="w-full py-8 bg-white text-black font-black text-xl rounded-[2rem] shadow-[0_20px_60px_-15px_rgba(255,255,255,0.2)] hover:bg-white/95 transition-all active:scale-[0.97] flex flex-col items-center group relative overflow-hidden"
-            >
-              <span className="relative z-10 flex items-center text-black">
-                Start a Call
-                <div className="ml-3 p-1 bg-black/5 rounded-lg group-hover:translate-x-1 transition-transform">
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-                  </svg>
-                </div>
-              </span>
-              <div className="absolute inset-0 bg-indigo-50 translate-y-full group-hover:translate-y-0 transition-transform duration-500" />
-            </button>
-          </div>
+          <Controls status={status} onStart={startSession} onStop={stopSession} />
         </div>
       ) : (
         <div className="flex-1 w-full flex flex-col animate-in fade-in duration-500">
-          
           <div className="flex-1 flex flex-col items-center justify-center pt-16">
-            <div className="relative mb-16">
-              {/* Dynamic Visualization Rings */}
-              <div className={`absolute inset-0 rounded-full blur-[100px] transition-all duration-700 ${isUserSpeaking ? 'bg-indigo-500/40 scale-150' : (isAgentSpeaking ? 'bg-indigo-400/20 scale-125' : 'bg-transparent')}`} />
-              
-              <div className={`w-44 h-44 rounded-full flex items-center justify-center transition-all duration-700 ${status === ConnectionStatus.CONNECTED ? 'bg-white/[0.01] border border-white/5 shadow-inner' : ''}`}>
-                <div className={`w-32 h-32 rounded-full flex items-center justify-center transition-all duration-500 ${isAgentSpeaking ? 'bg-indigo-400 scale-105 shadow-[0_0_60px_rgba(129,140,248,0.4)]' : 'bg-indigo-600 shadow-[0_0_40px_rgba(79,70,229,0.2)]'} shadow-2xl`}>
-                  {isAgentSpeaking ? (
-                    <div className="flex items-center space-x-1.5">
-                      {[1,2,3,4].map(i => <div key={i} className="w-1.5 h-10 bg-white rounded-full animate-pulse" style={{ animationDelay: `${i * 0.1}s` }} />)}
-                    </div>
-                  ) : (
-                    <svg className={`w-14 h-14 text-white ${isUserSpeaking ? 'scale-110' : 'opacity-80'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m8 0h-3m4-12a3 3 0 11-6 0 3 3 0 016 0z" />
-                    </svg>
-                  )}
-                </div>
-              </div>
-            </div>
+            <Avatar 
+              isAgentSpeaking={isAgentSpeaking} 
+              isUserSpeaking={isUserSpeaking} 
+              isConnecting={status === ConnectionStatus.CONNECTING} 
+            />
 
             <div className="text-center h-20 flex flex-col justify-center">
               {activeTool ? (
                 <div className="flex flex-col items-center animate-pulse text-indigo-400">
-                  <div className="text-[10px] font-mono uppercase tracking-[0.5em] mb-2 font-black">Updating CRM</div>
-                  <div className="text-white/40 text-[11px]">Syncing lead metadata...</div>
+                  <div className="text-[10px] font-mono uppercase tracking-[0.5em] mb-2 font-black">Syncing Knowledge</div>
+                  <div className="text-white/40 text-[11px]">Updating leads...</div>
                 </div>
               ) : (
                 <>
                   <h3 className="text-3xl font-outfit font-bold text-white mb-1 tracking-tighter">
-                    {isAgentSpeaking ? "Nova" : (isUserSpeaking ? "Listening..." : "Waiting for You")}
+                    {status === ConnectionStatus.CONNECTING ? "Connecting..." : (isAgentSpeaking ? "Tigest AI" : (isUserSpeaking ? "Listening..." : "Ready to Talk"))}
                   </h3>
                   <p className="text-white/20 text-[10px] uppercase tracking-[0.4em] font-black">
-                    {status === ConnectionStatus.CONNECTING ? "Connecting Link" : "Active Neural Stream"}
+                    {status === ConnectionStatus.CONNECTING ? "Establishing Secure Link" : "Voice Stream Active"}
                   </p>
                 </>
               )}
@@ -424,20 +444,13 @@ const VoiceAgent: React.FC = () => {
             </div>
           </div>
 
-          <div className="h-44 overflow-y-auto mb-8 px-8 no-scrollbar space-y-4 bg-white/[0.01] rounded-[2.5rem] py-8 border border-white/5 flex flex-col-reverse shadow-inner">
-             {liveTranscript.agent && <div className="text-white/50 italic text-sm text-left animate-pulse">{liveTranscript.agent}...</div>}
-             {liveTranscript.user && <div className="text-indigo-400 italic text-sm text-right animate-pulse">{liveTranscript.user}...</div>}
-             
-             {transcriptState.slice().reverse().map((msg, i) => (
-                <div key={i} className={`text-[13px] leading-relaxed ${msg.role === 'user' ? 'text-indigo-400/80 text-right font-medium' : 'text-white/70 text-left font-light'}`}>
-                  {msg.text}
-                </div>
-             ))}
-          </div>
+          <TranscriptBox 
+            transcript={transcriptState} 
+            liveUser={liveTranscript.user} 
+            liveAgent={liveTranscript.agent} 
+          />
 
-          <button onClick={stopSession} className="w-full py-5 bg-white/5 hover:bg-red-500/10 hover:text-red-400 text-white/20 font-black text-[10px] uppercase tracking-[0.4em] rounded-2xl transition-all border border-white/5 mb-2 hover:border-red-500/20 group">
-            <span className="group-hover:scale-105 transition-transform block">End Connection</span>
-          </button>
+          <Controls status={status} onStart={startSession} onStop={stopSession} />
         </div>
       )}
     </div>
