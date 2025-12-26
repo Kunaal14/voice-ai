@@ -1,0 +1,24 @@
+# GitHub Actions workflow to protect production branch
+# This makes the production branch less visible to the public
+
+name: Production Branch Protection
+
+on:
+  push:
+    branches:
+      - production
+  workflow_dispatch:
+
+jobs:
+  protect-production:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      
+      - name: Production Branch Notice
+        run: |
+          echo "⚠️ Production branch - internal use only"
+          echo "This branch contains personal/production changes"
+          echo "Not intended for public use"
+

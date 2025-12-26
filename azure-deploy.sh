@@ -48,7 +48,22 @@ else
     echo -e "${GREEN}✅ Static Web App exists${NC}"
 fi
 
-# Step 3: Build project
+# Step 3: Check current branch
+CURRENT_BRANCH=$(git branch --show-current)
+echo -e "${GREEN}✓${NC} Current branch: ${CURRENT_BRANCH}"
+
+if [ "$CURRENT_BRANCH" != "production" ]; then
+    echo -e "${YELLOW}⚠️  Warning: You're not on the 'production' branch${NC}"
+    echo -e "${YELLOW}   Production deployments should be from 'production' branch${NC}"
+    read -p "Continue anyway? (y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo -e "${RED}Deployment cancelled${NC}"
+        exit 1
+    fi
+fi
+
+# Step 4: Build project
 echo -e "${GREEN}✓${NC} Building project..."
 if [ ! -f .env.local ]; then
     echo -e "${YELLOW}⚠️  .env.local not found. Building without env vars (will use defaults)${NC}"
@@ -63,7 +78,7 @@ fi
 
 echo -e "${GREEN}✅ Build successful${NC}"
 
-# Step 4: Get deployment token
+# Step 5: Get deployment token
 echo -e "${GREEN}✓${NC} Getting deployment token..."
 DEPLOYMENT_TOKEN=$(az staticwebapp secrets list \
     --name "$APP_NAME" \
@@ -78,19 +93,19 @@ if [ -z "$DEPLOYMENT_TOKEN" ]; then
     exit 1
 fi
 
-# Step 5: Install SWA CLI if needed
+# Step 6: Install SWA CLI if needed
 if ! command -v swa &> /dev/null; then
     echo -e "${YELLOW}⚠️  Installing SWA CLI...${NC}"
     npm install -g @azure/static-web-apps-cli
 fi
 
-# Step 6: Deploy
+# Step 7: Deploy
 echo -e "${GREEN}✓${NC} Deploying to Azure..."
 swa deploy ./dist \
     --deployment-token "$DEPLOYMENT_TOKEN" \
     --env production
 
-# Step 7: Get URL
+# Step 8: Get URL
 APP_URL=$(az staticwebapp show \
     --name "$APP_NAME" \
     --resource-group "$RESOURCE_GROUP" \
