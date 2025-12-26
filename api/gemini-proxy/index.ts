@@ -1,4 +1,4 @@
-import { AzureFunction, Context, HttpRequest } from "@azure/functions";
+import { app, HttpRequest, HttpResponseInit, InvocationContext } from "@azure/functions";
 import { SecretClient } from "@azure/keyvault-secrets";
 import { DefaultAzureCredential } from "@azure/identity";
 
@@ -63,13 +63,10 @@ async function getApiKeyFromKeyVault(): Promise<string> {
   }
 }
 
-const httpTrigger: AzureFunction = async function (
-  context: Context,
-  req: HttpRequest
-): Promise<void> {
+async function geminiProxy(req: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
-    context.res = {
+    return {
       status: 200,
       headers: {
         "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
@@ -78,16 +75,15 @@ const httpTrigger: AzureFunction = async function (
         "Access-Control-Max-Age": "86400"
       }
     };
-    return;
   }
 
   try {
     // Rate limiting
     const clientIp = getClientIp(req);
     if (!checkRateLimit(clientIp)) {
-      context.res = {
+      return {
         status: 429,
-        body: {
+        jsonBody: {
           error: "Rate limit exceeded",
           message: "Too many requests. Please try again later."
         },
@@ -97,7 +93,6 @@ const httpTrigger: AzureFunction = async function (
           "Retry-After": "60"
         }
       };
-      return;
     }
 
     // Optional: Add authentication token check here
@@ -113,9 +108,11 @@ const httpTrigger: AzureFunction = async function (
     // Return the API key
     // Note: For Gemini Live API (WebSocket), the key still needs to be on client
     // But this adds security layers: rate limiting, monitoring, and Key Vault storage
-    context.res = {
+    context.log(`API key requested from IP: ${clientIp}`);
+    
+    return {
       status: 200,
-      body: {
+      jsonBody: {
         apiKey: apiKey
       },
       headers: {
@@ -125,14 +122,11 @@ const httpTrigger: AzureFunction = async function (
         "Access-Control-Allow-Headers": "Content-Type, Authorization"
       }
     };
-
-    // Log the request for monitoring
-    context.log(`API key requested from IP: ${clientIp}`);
   } catch (error) {
-    context.log.error("Error in gemini-proxy function:", error);
-    context.res = {
+    context.error("Error in gemini-proxy function:", error);
+    return {
       status: 500,
-      body: {
+      jsonBody: {
         error: "Internal server error",
         message: error instanceof Error ? error.message : "Unknown error"
       },
@@ -142,7 +136,11 @@ const httpTrigger: AzureFunction = async function (
       }
     };
   }
-};
+}
 
-export default httpTrigger;
+app.http('gemini-proxy', {
+  methods: ['GET', 'POST', 'OPTIONS'],
+  authLevel: 'function',
+  handler: geminiProxy
+});
 
