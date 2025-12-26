@@ -1,0 +1,23 @@
+{
+  "name": "tigest-voice-ai-api",
+  "version": "1.0.0",
+  "description": "Azure Functions for Tigest Voice AI Landing Page",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "prestart": "npm run build",
+    "start": "func start",
+    "test": "echo \"No tests specified\" && exit 0"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.5.0",
+    "@azure/keyvault-secrets": "^4.7.0",
+    "@azure/identity": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "azure-functions-core-tools": "^4.0.0"
+  }
+}
+

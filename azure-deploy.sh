@@ -10,7 +10,7 @@ echo "🚀 Azure Static Web Apps Deployment"
 # Configuration
 RESOURCE_GROUP="Kunaal"
 APP_NAME="tigest-voice-ai-landing"
-LOCATION="southindia"
+LOCATION="eastus2"  # Static Web Apps supported regions: westus2, centralus, eastus2, westeurope, eastasia
 
 # Colors
 GREEN='\033[0;32m'
@@ -103,6 +103,8 @@ if [ ! -z "$APP_URL" ]; then
     echo -e "${GREEN}🌐 Your app is live at: https://$APP_URL${NC}"
 fi
 echo ""
-echo -e "${YELLOW}💡 Remember to set environment variables in Azure Portal if needed:${NC}"
-echo -e "${YELLOW}   Static Web Apps > $APP_NAME > Configuration > Application settings${NC}"
+echo -e "${YELLOW}💡 Next steps:${NC}"
+echo -e "${YELLOW}   1. Deploy Azure Function for secure API key: ./deploy-function.sh${NC}"
+echo -e "${YELLOW}   2. Add GEMINI_API_KEY_URL to .env.local${NC}"
+echo -e "${YELLOW}   3. Configure custom domain: tigest.club${NC}"
 

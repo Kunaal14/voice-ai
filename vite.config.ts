@@ -11,9 +11,11 @@ export default defineConfig(({ mode }) => {
       },
       plugins: [react()],
       define: {
-        // API Keys
+        // API Keys (fallback - prefer Azure Function)
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
         'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+        // Azure Function URL for secure API key retrieval
+        'process.env.GEMINI_API_KEY_URL': JSON.stringify(env.GEMINI_API_KEY_URL),
         // Webhook URLs
         'process.env.FORM_WEBHOOK_URL': JSON.stringify(env.FORM_WEBHOOK_URL),
         'process.env.TRANSCRIPT_WEBHOOK_URL': JSON.stringify(env.TRANSCRIPT_WEBHOOK_URL),

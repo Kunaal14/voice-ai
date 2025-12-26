@@ -1,31 +1,33 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
 
-node_modules
-dist
-dist-ssr
-*.local
+# Testing
+coverage/
 
-# Environment variables - NEVER commit these
+# Production
+dist/
+build/
+
+# Misc
+.DS_Store
 .env
 .env.local
 .env.*.local
-.env.production
-.env.development
+*.log
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Azure
+.azure/
+
+# Function App
+api/node_modules/
+api/dist/
+api/function-app.zip

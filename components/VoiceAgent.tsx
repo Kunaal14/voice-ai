@@ -14,6 +14,8 @@ import Controls from './voice/Controls';
 // Webhook URLs loaded from environment variables
 const TRANSCRIPT_WEBHOOK_URL = process.env.TRANSCRIPT_WEBHOOK_URL || '';
 const CALENDAR_AVAILABILITY_URL = process.env.CALENDAR_AVAILABILITY_URL || '';
+// Azure Function URL for secure API key retrieval
+const GEMINI_API_KEY_URL = process.env.GEMINI_API_KEY_URL || '';
 const MAX_CALL_DURATION = 300; 
 const SILENCE_TIMEOUT_MS = 15000; // Exact 15s
 const MIN_RMS_THRESHOLD = 0.003; // More sensitive floor
@@ -234,14 +236,49 @@ const VoiceAgent: React.FC = () => {
       mediaRecorder.onstop = () => finalizeAndSend(new Blob(audioChunksRef.current, { type: 'audio/webm' }));
       mediaRecorder.start(1000);
 
-      // Validate API key is set
-      if (!process.env.API_KEY) {
-        console.error('GEMINI_API_KEY is not set in .env.local');
-        setStatus(ConnectionStatus.ERROR);
-        return;
+      // Fetch API key from Azure Function (Key Vault) or fallback to env var
+      let apiKey: string;
+      
+      if (GEMINI_API_KEY_URL) {
+        try {
+          const response = await fetch(GEMINI_API_KEY_URL, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          });
+          
+          if (!response.ok) {
+            throw new Error(`Failed to fetch API key: ${response.statusText}`);
+          }
+          
+          const data = await response.json();
+          apiKey = data.apiKey;
+          
+          if (!apiKey) {
+            throw new Error('API key not returned from Azure Function');
+          }
+        } catch (error) {
+          console.error('Error fetching API key from Azure Function:', error);
+          // Fallback to environment variable if Azure Function fails
+          apiKey = process.env.API_KEY || '';
+          if (!apiKey) {
+            console.error('GEMINI_API_KEY is not available from Azure Function or .env.local');
+            setStatus(ConnectionStatus.ERROR);
+            return;
+          }
+        }
+      } else {
+        // Fallback to environment variable if GEMINI_API_KEY_URL is not set
+        apiKey = process.env.API_KEY || '';
+        if (!apiKey) {
+          console.error('GEMINI_API_KEY is not set in .env.local and GEMINI_API_KEY_URL is not configured');
+          setStatus(ConnectionStatus.ERROR);
+          return;
+        }
       }
       
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey });
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
         config: {
