@@ -4,7 +4,8 @@ import Header from './components/Header';
 import VoiceAgent from './components/VoiceAgent';
 import ROICalculator from './components/ROICalculator';
 
-const FORM_WEBHOOK_URL = "https://kunaal-n8n-app.proudsmoke-84fb7068.northeurope.azurecontainerapps.io/webhook/landing-page-form";
+// Webhook URL loaded from environment variable
+const FORM_WEBHOOK_URL = process.env.FORM_WEBHOOK_URL || '';
 
 const TigestLogo = () => (
   <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
@@ -62,6 +63,14 @@ const App: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (!FORM_WEBHOOK_URL) {
+      console.error('FORM_WEBHOOK_URL is not set in .env.local');
+      setFormStatus('error');
+      alert('Form submission is not configured. Please set FORM_WEBHOOK_URL in .env.local');
+      return;
+    }
+    
     setFormStatus('loading');
     try {
       const payload = { ...formData, source: 'Landing Page Form', timestamp: new Date().toISOString() };

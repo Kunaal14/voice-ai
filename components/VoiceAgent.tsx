@@ -11,8 +11,9 @@ import TranscriptBox from './voice/TranscriptBox';
 import StatusHeader from './voice/StatusHeader';
 import Controls from './voice/Controls';
 
-const TRANSCRIPT_WEBHOOK_URL = "https://kunaal-n8n-app.proudsmoke-84fb7068.northeurope.azurecontainerapps.io/webhook/landing-page";
-const CALENDAR_AVAILABILITY_URL = "https://kunaal-n8n-app.proudsmoke-84fb7068.northeurope.azurecontainerapps.io/webhook/calendar-availability"; // Update with your actual endpoint
+// Webhook URLs loaded from environment variables
+const TRANSCRIPT_WEBHOOK_URL = process.env.TRANSCRIPT_WEBHOOK_URL || '';
+const CALENDAR_AVAILABILITY_URL = process.env.CALENDAR_AVAILABILITY_URL || '';
 const MAX_CALL_DURATION = 300; 
 const SILENCE_TIMEOUT_MS = 15000; // Exact 15s
 const MIN_RMS_THRESHOLD = 0.003; // More sensitive floor
@@ -147,6 +148,10 @@ const VoiceAgent: React.FC = () => {
 
   const finalizeAndSend = useCallback(async (audioBlob: Blob) => {
     if (audioBlob.size === 0) return;
+    if (!TRANSCRIPT_WEBHOOK_URL) {
+      console.warn('TRANSCRIPT_WEBHOOK_URL not configured. Transcript will not be saved.');
+      return;
+    }
     const reader = new FileReader();
     reader.readAsDataURL(audioBlob);
     reader.onloadend = async () => {
@@ -229,6 +234,13 @@ const VoiceAgent: React.FC = () => {
       mediaRecorder.onstop = () => finalizeAndSend(new Blob(audioChunksRef.current, { type: 'audio/webm' }));
       mediaRecorder.start(1000);
 
+      // Validate API key is set
+      if (!process.env.API_KEY) {
+        console.error('GEMINI_API_KEY is not set in .env.local');
+        setStatus(ConnectionStatus.ERROR);
+        return;
+      }
+      
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
@@ -315,6 +327,23 @@ const VoiceAgent: React.FC = () => {
                 } else if (fc.name === 'get_calendar_availability') {
                   // Handle calendar availability tool call
                   setActiveTool(fc.name);
+                  
+                  if (!CALENDAR_AVAILABILITY_URL) {
+                    console.warn('CALENDAR_AVAILABILITY_URL not configured');
+                    session.sendToolResponse({ 
+                      functionResponses: { 
+                        id: fc.id, 
+                        name: fc.name, 
+                        response: {
+                          success: false,
+                          error: "Calendar availability feature is not configured. Please set CALENDAR_AVAILABILITY_URL in .env.local"
+                        }
+                      } 
+                    });
+                    setTimeout(() => setActiveTool(null), 2000);
+                    continue;
+                  }
+                  
                   try {
                     // Make POST request to get calendar availability
                     const response = await fetch(CALENDAR_AVAILABILITY_URL, {

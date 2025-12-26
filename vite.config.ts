@@ -11,8 +11,13 @@ export default defineConfig(({ mode }) => {
       },
       plugins: [react()],
       define: {
+        // API Keys
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
+        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+        // Webhook URLs
+        'process.env.FORM_WEBHOOK_URL': JSON.stringify(env.FORM_WEBHOOK_URL),
+        'process.env.TRANSCRIPT_WEBHOOK_URL': JSON.stringify(env.TRANSCRIPT_WEBHOOK_URL),
+        'process.env.CALENDAR_AVAILABILITY_URL': JSON.stringify(env.CALENDAR_AVAILABILITY_URL),
       },
       resolve: {
         alias: {
